@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Tag Parser — demo</title>
+<meta name="description" content="Turn messy CRM tags and free-text into clean structured fields. Runs entirely in your browser.">
+<style>
+  :root{
+    --bg:#0b0d12;--card:#141824;--line:#232838;--text:#e8ebf2;--muted:#9aa3b5;
+    --accent:#6ee7b7;--accent-2:#60a5fa;--font:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55;
+    background-image:radial-gradient(800px 400px at 85% -10%,rgba(110,231,183,.12),transparent 60%);min-height:100vh}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 22px 80px}
+  h1{font-size:30px;margin:0 0 6px;font-weight:700}
+  h1 .g{background:linear-gradient(100deg,var(--accent),var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--muted);margin:0 0 28px;font-size:16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .panel h2{font-size:13px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:0 0 12px;font-weight:600}
+  textarea{width:100%;min-height:200px;resize:vertical;background:#0e1118;color:var(--text);
+    border:1px solid var(--line);border-radius:10px;padding:14px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.6}
+  textarea:focus{outline:none;border-color:var(--accent)}
+  .btns{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 26px}
+  button{font:inherit;font-size:14px;font-weight:600;padding:10px 16px;border-radius:9px;border:1px solid var(--line);
+    background:var(--card);color:var(--text);cursor:pointer;transition:.15s}
+  button:hover{transform:translateY(-1px)}
+  button.primary{background:linear-gradient(100deg,var(--accent),var(--accent-2));color:#07120d;border-color:transparent}
+  .out{min-height:200px}
+  pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px}
+  .k{color:var(--accent-2)}.s{color:var(--accent)}.n{color:#f0abfc}.muted{color:var(--muted)}
+  .fields{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+  .field{display:flex;justify-content:space-between;gap:12px;background:#0e1118;border:1px solid var(--line);border-radius:8px;padding:9px 12px;font-size:14px}
+  .field .lab{color:var(--muted)}.field .val{font-weight:600;text-align:right}
+  .empty{color:var(--muted);font-size:14px}
+  footer{margin-top:40px;color:var(--muted);font-size:13px;text-align:center}
+  footer a{color:var(--accent)}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Smart Tag <span class="g">Parser</span></h1>
+    <p class="sub">CRMs often bury real data inside free-text tags. This turns that mess into clean, structured fields — <strong>100% in your browser, no server, no data leaves this page.</strong></p>
+
+    <div class="grid">
+      <div class="panel">
+        <h2>Input — paste tags / notes</h2>
+        <textarea id="in" spellcheck="false"></textarea>
+      </div>
+      <div class="panel">
+        <h2>Parsed fields</h2>
+        <div id="fields" class="fields"><div class="empty">Parsed output appears here…</div></div>
+      </div>
+    </div>
+
+    <div class="btns">
+      <button class="primary" id="parse">Parse →</button>
+      <button id="sample">Load sample</button>
+      <button id="clear">Clear</button>
+      <button id="copy">Copy JSON</button>
+    </div>
+
+    <div class="panel">
+      <h2>JSON output</h2>
+      <pre id="json" class="out"><span class="muted">{ }</span></pre>
+    </div>
+
+    <footer>
+      Built by <a href="https://github.com/realaweayomide">Ayomide Awe</a> · rule-based, runs offline · view the code on GitHub
+    </footer>
+  </div>
+
+<script>
+const SAMPLE = `referral: us business funding llc (george otel)
+sell-price-9000
+partner-tier: gold
+status: qualified
+contact-email: george@usbf.com
+phone 561-408-1921
+source=webinar
+created 2024-09-02`;
+
+// --- helpers ---
+function titleCase(str){
+  const upper = new Set(['LLC','INC','LLP','LP','LTD','PLC','USA','US','UK','LLC.']);
+  return str.trim().split(/\s+/).map(w=>{
+    const bare = w.replace(/[.,]/g,'').toUpperCase();
+    if(upper.has(bare)) return w.toUpperCase();
+    return w.charAt(0).toUpperCase()+w.slice(1).toLowerCase();
+  }).join(' ');
+}
+function money(n){ return '$'+Number(n).toLocaleString('en-US'); }
+
+// --- the parser ---
+function parse(text){
+  const out = {};
+  const t = text || '';
+
+  // sell price: "sell-price-9000", "sell price: 9000", "$9,000"
+  let m = t.match(/sell[\s\-_]*price[\s\-_:=]*\$?\s*([\d,]+)/i);
+  if(m) out.sellPrice = money(m[1].replace(/,/g,''));
+
+  // referral partner + optional contact in parentheses
+  m = t.match(/referral[\s\-_:=]*([^\n(]+?)(?:\s*\(([^)]+)\))?\s*(?:\n|$)/i);
+  if(m){
+    out.referralPartner = titleCase(m[1]);
+    if(m[2]) out.referralContact = titleCase(m[2]);
+  }
+
+  // email
+  m = t.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+  if(m) out.email = m[0].toLowerCase();
+
+  // phone (loose US-ish)
+  m = t.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/);
+  if(m) out.phone = m[0].replace(/[^\d+]/g,'');
+
+  // tier
+  m = t.match(/tier[\s\-_:=]*([a-z]+)/i);
+  if(m) out.partnerTier = titleCase(m[1]);
+
+  // status
+  m = t.match(/status[\s\-_:=]*([a-z ]+)/i);
+  if(m) out.status = titleCase(m[1]);
+
+  // source
+  m = t.match(/source[\s\-_:=]*([a-z]+)/i);
+  if(m) out.source = titleCase(m[1]);
+
+  // date (yyyy-mm-dd or created ...)
+  m = t.match(/(\d{4}-\d{2}-\d{2})/);
+  if(m) out.date = m[1];
+
+  return out;
+}
+
+const LABELS = {
+  sellPrice:'Sell price', referralPartner:'Referral partner', referralContact:'Contact',
+  email:'Email', phone:'Phone', partnerTier:'Partner tier', status:'Status',
+  source:'Source', date:'Date'
+};
+
+function syntax(json){
+  return json
+    .replace(/("(\\.|[^"\\])*")(\s*:)/g,'<span class="k">$1</span>$3')
+    .replace(/:\s*("(\\.|[^"\\])*")/g,': <span class="s">$1</span>')
+    .replace(/:\s*(\d[\d,]*)/g,': <span class="n">$1</span>');
+}
+
+function render(){
+  const data = parse(document.getElementById('in').value);
+  const keys = Object.keys(data);
+  const fieldsEl = document.getElementById('fields');
+  const jsonEl = document.getElementById('json');
+
+  if(!keys.length){
+    fieldsEl.innerHTML = '<div class="empty">No recognizable fields found — try the sample.</div>';
+    jsonEl.innerHTML = '<span class="muted">{ }</span>';
+    return;
+  }
+  fieldsEl.innerHTML = keys.map(k=>
+    `<div class="field"><span class="lab">${LABELS[k]||k}</span><span class="val">${data[k]}</span></div>`
+  ).join('');
+  jsonEl.innerHTML = syntax(JSON.stringify(data, null, 2));
+}
+
+document.getElementById('parse').onclick = render;
+document.getElementById('sample').onclick = ()=>{ document.getElementById('in').value = SAMPLE; render(); };
+document.getElementById('clear').onclick = ()=>{ document.getElementById('in').value=''; render(); };
+document.getElementById('copy').onclick = ()=>{
+  const data = parse(document.getElementById('in').value);
+  navigator.clipboard.writeText(JSON.stringify(data,null,2)).then(()=>{
+    const b=document.getElementById('copy'); const o=b.textContent; b.textContent='Copied ✓';
+    setTimeout(()=>b.textContent=o,1200);
+  });
+};
+// live parse as you type
+document.getElementById('in').addEventListener('input', render);
+</script>
+</body>
+</html>
